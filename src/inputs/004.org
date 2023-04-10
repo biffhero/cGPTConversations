@@ -1134,10 +1134,236 @@ for short_delta in short_delta_range:
                 credit_received.append(call_short_price + put_short_price - call_long_price - put_long_price)
                 max_profit.append(credit_received[-1])
                
-
 #+END_SRC
 
 * Q27
 Please resend that, I think we were cut off.
+* A27
+
+My apologies, here's the updated code with the additional statistics
+and CSV output:
+
+#+BEGIN_SRC python
+import pandas as pd
+import numpy as np
+from scipy.stats import norm
+
+# Load SPX option data
+options_data = pd.read_csv('SPX-options.csv')
+
+# Load SPX pricing data
+prices_data = pd.read_csv('SPX-prices.csv')
+
+# Define function to calculate option prices
+def black_scholes_call(S, K, T, r, sigma):
+    d1 = (np.log(S/K) + (r + sigma**2/2)*T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+
+def black_scholes_put(S, K, T, r, sigma):
+    d1 = (np.log(S/K) + (r + sigma**2/2)*T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+def option_price(S, K, T, r, sigma, option_type):
+    if option_type == 'C':
+        return black_scholes_call(S, K, T, r, sigma)
+    elif option_type == 'P':
+        return black_scholes_put(S, K, T, r, sigma)
+    else:
+        raise ValueError('Invalid option type')
+
+# Define function to calculate greeks
+def calculate_greeks(S, K, T, r, sigma, option_type):
+    d1 = (np.log(S/K) + (r + sigma**2/2)*T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    delta = norm.cdf(d1) if option_type == 'C' else norm.cdf(d1) - 1
+    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
+    theta = -(S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2) if option_type == 'C' else -(S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)
+    vega = S * norm.pdf(d1) * np.sqrt(T)
+    return delta, gamma, theta, vega
+
+# Define function to calculate implied volatility
+def implied_volatility(S, K, T, r, option_price, option_type):
+    # Define objective function to solve for implied volatility
+    def objective_function(sigma):
+        return abs(option_price - option_price(S, K, T, r, sigma, option_type))
+
+    # Solve for implied volatility
+    implied_vol, _ = optimize.brentq(objective_function, a=0.0001, b=10, full_output=True)
+    return implied_vol
+
+# Define function to simulate Iron Condor trades
+def simulate_iron_condor_trades(options_data, prices_data, delta, width, DTE, profit_target, stop_loss):
+    # Calculate expiration date
+    expiration_date = pd.to_datetime(prices_data['Date'][0]) + pd.Timedelta(DTE, unit='days')
+
+    # Filter options data by expiration date and delta
+    filtered_options_data = options_data[(options_data['Expiration'] == expiration_date) &
+
+#+END_SRC
+
+* Q28
+We were cut off again. Please read send, but start with the function
+called "simulate_iron_condor", and remember that we are optimizing
+over a few variables.
 * A28
+Certainly, here's the updated code incorporating the requested
+changes:
+#+BEGIN_SRC python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Tuple
+
+
+def simulate_iron_condor(data: pd.DataFrame, delta_short: int, width: int, days_to_expiry: int,
+                         profit_target: float, stop_loss: float, risk_free_rate: float) -> Tuple[float, pd.DataFrame]:
+    """Simulates an iron condor trade and returns the resulting profit or loss and a DataFrame of trade statistics"""
+
+    # Extract relevant data from DataFrame
+    underlying_price = data['close'][0]
+    option_chain = data.loc[(data['expiration_date'] == days_to_expiry) &
+                            (data['option_type'].isin(['call', 'put']))]
+
+    # Calculate short and long strikes
+    short_call_strike = round(underlying_price * (1 + delta_short / 100), -1)
+    short_put_strike = round(underlying_price * (1 - delta_short / 100), -1)
+    long_call_strike = short_call_strike + width
+    long_put_strike = short_put_strike - width
+
+    # Filter for relevant options
+    short_call = option_chain[(option_chain['strike'] == short_call_strike) & (option_chain['option_type'] == 'call')]
+    short_put = option_chain[(option_chain['strike'] == short_put_strike) & (option_chain['option_type'] == 'put')]
+    long_call = option_chain[(option_chain['strike'] == long_call_strike) & (option_chain['option_type'] == 'call')]
+    long_put = option_chain[(option_chain['strike'] == long_put_strike) & (option_chain['option_type'] == 'put')]
+
+    # Calculate net credit or debit
+    net_credit = short_call['midpoint'].iloc[0] + short_put['midpoint'].iloc[0] - \
+                 long_call['midpoint'].iloc[0] - long_put['midpoint'].iloc[0]
+
+    # Define profit and loss thresholds
+    profit_threshold = net_credit * profit_target
+    stop_loss_threshold = net_credit * stop_loss
+
+    # Initialize trade variables
+    position_delta = short_call['delta'].iloc[0] - short_put['delta'].iloc[0] + long_call['delta'].iloc[0] - \
+                     long_put['delta'].iloc[0]
+    position_gamma = short_call['gamma'].iloc[0] + short_put['gamma'].iloc[0] - long_call['gamma'].iloc[0] - \
+                     long_put['gamma'].iloc[0]
+    position_vega = short_call['vega'].iloc[0] + short_put['vega'].iloc[0] - long_call['vega'].iloc[0] - \
+                    long_put['vega'].iloc[0]
+    position_theta = short_call['theta'].iloc[0] + short_put['theta'].iloc[0] - long_call['theta'].iloc[0] - \
+                     long_put['theta'].iloc[0]
+    pnl = 0
+    max_pnl = 0
+    max_drawdown = 0
+    trade_stats = []
+
+    # Simulate trade over time
+    for i in range(len(data)):
+
+        # Update option chain and underlying price
+        option_chain = data.loc[(data['expiration_date'] == days_to_expiry) &
+                                (data['option_type'].isin(['call', 'put']))]
+        underlying_price = data['close'][i]
+
+        # Calculate option values
+        short_call_value = option_chain[(option_chain['strike'] == short_call_strike) &
+                                        (option_chain['option_type'] ==
+
+#+END_SRC
+
+* Q29
+I'm afraid we keep getting cut off. Maybe we should have less text with each response
+More functions, less code
+
+* A29
+
+Sure, let's try breaking it down into smaller functions. Here is a
+version of the code that uses smaller functions:
+
+#+BEGIN_SRC
+
+import pandas as pd
+import numpy as np
+
+# Load the option data
+option_data = pd.read_csv("SPX-option-data.csv")
+
+# Load the underlying prices
+price_data = pd.read_csv("SPX-prices.csv")
+price_data["date"] = pd.to_datetime(price_data["date"])
+price_data.set_index("date", inplace=True)
+
+# Define the functions for calculating statistics
+def sharpe_ratio(returns, risk_free_rate):
+    excess_returns = returns - risk_free_rate
+    return np.sqrt(252) * np.mean(excess_returns) / np.std(excess_returns)
+
+def sortino_ratio(returns, risk_free_rate, mar):
+    excess_returns = returns - risk_free_rate
+    downside_returns = np.minimum(excess_returns, mar)
+    return np.sqrt(252) * np.mean(excess_returns) / np.std(downside_returns)
+
+def max_drawdown(returns):
+    running_max = np.maximum.accumulate(returns)
+    drawdown = (running_max - returns) / running_max
+    return np.max(drawdown)
+
+def max_profit(returns):
+    return np.max(returns)
+
+def heartburn_index(returns, mar):
+    downside_returns = returns[returns < mar]
+    return len(downside_returns) / len(returns)
+
+# Define the function for simulating the iron condor
+def simulate_iron_condor(df, short_delta, wide_width, narrow_width, dte, profit_target, stop_loss):
+    # Define the strikes for the iron condor
+    short_call_strike = df[df["delta"] < -short_delta]["strike"].min()
+    long_call_strike = short_call_strike + wide_width
+    long_put_strike = df[df["delta"] > short_delta]["strike"].max()
+    short_put_strike = long_put_strike - wide_width
+    
+    # Filter the option data for the iron condor strikes and the DTE
+    option_data_filtered = df[(df["strike"] >= short_call_strike - narrow_width) & 
+                              (df["strike"] <= long_call_strike + narrow_width) & 
+                              (df["strike"] >= short_put_strike - narrow_width) & 
+                              (df["strike"] <= long_put_strike + narrow_width) & 
+                              (df["days_to_expiry"] == dte)]
+    
+    # Calculate the credit received for the iron condor
+    credit_received = option_data_filtered["bid_price"].sum() - option_data_filtered["ask_price"].sum()
+    
+    # Define the profit and stop loss levels
+    profit_level = credit_received * profit_target
+    stop_loss_level = credit_received * stop_loss
+    
+    # Define the time range for the iron condor
+    start_date = option_data_filtered["date"].min()
+    end_date = start_date + pd.Timedelta(days=dte)
+    time_range = pd.date_range(start=start_date, end=end_date, freq="B")
+    
+    # Calculate the returns for the iron condor
+    returns = []
+    for date in time_range:
+        try:
+            price = price_data.loc[date]["price"]
+            option_price = option_data_filtered[option_data_filtered["date"] == date]["mid_price"].sum()
+            pnl = credit_received - option_price
+            returns.append(pnl / credit_received)
+            
+            # Check if profit target or stop loss are hit
+            if pnl >= profit_level or pnl <= -stop_loss_level:
+                break
+        except KeyError:
+            pass
+    
+    # Calculate the statistics for the iron condor
+    if len(returns) > 0:
+        sharpe = sharpe_ratio(returns, 
+
+
+#+END_SRC
 
